@@ -1,60 +1,40 @@
 from os import listdir, path
 import numpy as np
-import scipy, cv2, os, sys, argparse, audio
+import scipy, cv2, os, sys, argparse
+import app.api.Wav2Lip.audio as audio
 import json, subprocess, random, string
 from tqdm import tqdm
 from glob import glob
-import torch, face_detection
-from models import Wav2Lip
+import torch 
+import app.api.Wav2Lip.face_detection as face_detection
+from app.api.Wav2Lip.models import Wav2Lip
 import platform
 
-parser = argparse.ArgumentParser(description='Inference code to lip-sync videos in the wild using Wav2Lip models')
+checkpoint_path = "/home/ubuntu/FaceChangeBabbleAPIAdmin/app/api/Wav2Lip/checkpoints/wav2lip.pth"
 
-parser.add_argument('--checkpoint_path', type=str, 
-					help='Name of saved checkpoint to load weights from', required=True)
+static = False
 
-parser.add_argument('--face', type=str, 
-					help='Filepath of video/image that contains faces to use', required=True)
-parser.add_argument('--audio', type=str, 
-					help='Filepath of video/audio file to use as raw audio source', required=True)
-parser.add_argument('--outfile', type=str, help='Video path to save result. See default for an e.g.', 
-								default='results/result_voice.mp4')
+final_fps = 25.
 
-parser.add_argument('--static', type=bool, 
-					help='If True, then use only first video frame for inference', default=False)
-parser.add_argument('--fps', type=float, help='Can be specified only if input is a static image (default: 25)', 
-					default=25., required=False)
+bbox_pads = [0, 10, 0, 0]
 
-parser.add_argument('--pads', nargs='+', type=int, default=[0, 10, 0, 0], 
-					help='Padding (top, bottom, left, right). Please adjust to include chin at least')
+face_det_batch_size = 16
 
-parser.add_argument('--face_det_batch_size', type=int, 
-					help='Batch size for face detection', default=16)
-parser.add_argument('--wav2lip_batch_size', type=int, help='Batch size for Wav2Lip model(s)', default=128)
+wav2lip_batch_size = 128
 
-parser.add_argument('--resize_factor', default=1, type=int, 
-			help='Reduce the resolution by this factor. Sometimes, best results are obtained at 480p or 720p')
+resize_factor = 1
 
-parser.add_argument('--crop', nargs='+', type=int, default=[0, -1, 0, -1], 
-					help='Crop video to a smaller region (top, bottom, left, right). Applied after resize_factor and rotate arg. ' 
-					'Useful if multiple face present. -1 implies the value will be auto-inferred based on height, width')
+crop = [0, -1, 0, -1]
 
-parser.add_argument('--box', nargs='+', type=int, default=[-1, -1, -1, -1], 
-					help='Specify a constant bounding box for the face. Use only as a last resort if the face is not detected.'
-					'Also, might work only if the face is not moving around much. Syntax: (top, bottom, left, right).')
+submit_box = [-1, -1, -1, -1]
 
-parser.add_argument('--rotate', default=False, action='store_true',
-					help='Sometimes videos taken from a phone can be flipped 90deg. If true, will flip video right by 90deg.'
-					'Use if you get a flipped result, despite feeding a normal looking video')
+rotate = False
 
-parser.add_argument('--nosmooth', default=False, action='store_true',
-					help='Prevent smoothing face detections over a short temporal window')
+nosmooth = False 
 
-args = parser.parse_args()
-args.img_size = 96
+final_img_size = 96
 
-if os.path.isfile(args.face) and args.face.split('.')[1] in ['jpg', 'png', 'jpeg']:
-	args.static = True
+
 
 def get_smoothened_boxes(boxes, T):
 	for i in range(len(boxes)):
@@ -69,7 +49,7 @@ def face_detect(images):
 	detector = face_detection.FaceAlignment(face_detection.LandmarksType._2D, 
 											flip_input=False, device=device)
 
-	batch_size = args.face_det_batch_size
+	batch_size = face_det_batch_size
 	
 	while 1:
 		predictions = []
@@ -85,7 +65,7 @@ def face_detect(images):
 		break
 
 	results = []
-	pady1, pady2, padx1, padx2 = args.pads
+	pady1, pady2, padx1, padx2 = bbox_pads
 	for rect, image in zip(predictions, images):
 		if rect is None:
 			cv2.imwrite('/home/ubuntu/FaceChangeBabbleAPIAdmin/app/api/Wav2Lip/temp/faulty_frame.jpg', image) # check this frame where the face was not detected.
@@ -99,7 +79,7 @@ def face_detect(images):
 		results.append([x1, y1, x2, y2])
 
 	boxes = np.array(results)
-	if not args.nosmooth: boxes = get_smoothened_boxes(boxes, T=5)
+	if not nosmooth: boxes = get_smoothened_boxes(boxes, T=5)
 	results = [[image[y1: y2, x1:x2], (y1, y2, x1, x2)] for image, (x1, y1, x2, y2) in zip(images, boxes)]
 
 	del detector
@@ -108,33 +88,33 @@ def face_detect(images):
 def datagen(frames, mels):
 	img_batch, mel_batch, frame_batch, coords_batch = [], [], [], []
 
-	if args.box[0] == -1:
-		if not args.static:
+	if submit_box[0] == -1:
+		if not static:
 			face_det_results = face_detect(frames) # BGR2RGB for CNN face detection
 		else:
 			face_det_results = face_detect([frames[0]])
 	else:
 		print('Using the specified bounding box instead of face detection...')
-		y1, y2, x1, x2 = args.box
+		y1, y2, x1, x2 = submit_box
 		face_det_results = [[f[y1: y2, x1:x2], (y1, y2, x1, x2)] for f in frames]
 
 	for i, m in enumerate(mels):
-		idx = 0 if args.static else i%len(frames)
+		idx = 0 if static else i%len(frames)
 		frame_to_save = frames[idx].copy()
 		face, coords = face_det_results[idx].copy()
 
-		face = cv2.resize(face, (args.img_size, args.img_size))
+		face = cv2.resize(face, (final_img_size, final_img_size))
 			
 		img_batch.append(face)
 		mel_batch.append(m)
 		frame_batch.append(frame_to_save)
 		coords_batch.append(coords)
 
-		if len(img_batch) >= args.wav2lip_batch_size:
+		if len(img_batch) >= wav2lip_batch_size:
 			img_batch, mel_batch = np.asarray(img_batch), np.asarray(mel_batch)
 
 			img_masked = img_batch.copy()
-			img_masked[:, args.img_size//2:] = 0
+			img_masked[:, final_img_size//2:] = 0
 
 			img_batch = np.concatenate((img_masked, img_batch), axis=3) / 255.
 			mel_batch = np.reshape(mel_batch, [len(mel_batch), mel_batch.shape[1], mel_batch.shape[2], 1])
@@ -146,7 +126,7 @@ def datagen(frames, mels):
 		img_batch, mel_batch = np.asarray(img_batch), np.asarray(mel_batch)
 
 		img_masked = img_batch.copy()
-		img_masked[:, args.img_size//2:] = 0
+		img_masked[:, final_img_size//2:] = 0
 
 		img_batch = np.concatenate((img_masked, img_batch), axis=3) / 255.
 		mel_batch = np.reshape(mel_batch, [len(mel_batch), mel_batch.shape[1], mel_batch.shape[2], 1])
@@ -178,16 +158,16 @@ def load_model(path):
 	model = model.to(device)
 	return model.eval()
 
-def main():
-	if not os.path.isfile(args.face):
+def wav2lip_inference_modify(face_file, audio_file, outfile):
+	if not os.path.isfile(face_file):
 		raise ValueError('--face argument must be a valid path to video/image file')
 
-	elif args.face.split('.')[1] in ['jpg', 'png', 'jpeg']:
-		full_frames = [cv2.imread(args.face)]
-		fps = args.fps
+	elif face_file.split('.')[1] in ['jpg', 'png', 'jpeg']:
+		full_frames = [cv2.imread(face_file)]
+		fps = final_fps
 
 	else:
-		video_stream = cv2.VideoCapture(args.face)
+		video_stream = cv2.VideoCapture(face_file)
 		fps = video_stream.get(cv2.CAP_PROP_FPS)
 
 		print('Reading video frames...')
@@ -198,13 +178,13 @@ def main():
 			if not still_reading:
 				video_stream.release()
 				break
-			if args.resize_factor > 1:
-				frame = cv2.resize(frame, (frame.shape[1]//args.resize_factor, frame.shape[0]//args.resize_factor))
+			if resize_factor > 1:
+				frame = cv2.resize(frame, (frame.shape[1]//resize_factor, frame.shape[0]//resize_factor))
 
-			if args.rotate:
+			if rotate:
 				frame = cv2.rotate(frame, cv2.cv2.ROTATE_90_CLOCKWISE)
 
-			y1, y2, x1, x2 = args.crop
+			y1, y2, x1, x2 = crop
 			if x2 == -1: x2 = frame.shape[1]
 			if y2 == -1: y2 = frame.shape[0]
 
@@ -214,14 +194,14 @@ def main():
 
 	print ("Number of frames available for inference: "+str(len(full_frames)))
 
-	if not args.audio.endswith('.wav'):
+	if not audio_file.endswith('.wav'):
 		print('Extracting raw audio...')
-		command = 'ffmpeg -y -i {} -strict -2 {}'.format(args.audio, '/home/ubuntu/FaceChangeBabbleAPIAdmin/app/api/Wav2Lip/temp/temp.wav')
+		command = 'ffmpeg -y -i {} -strict -2 {}'.format(audio_file, '/home/ubuntu/FaceChangeBabbleAPIAdmin/app/api/Wav2Lip/temp/temp.wav')
 
 		subprocess.call(command, shell=True)
-		args.audio = '/home/ubuntu/FaceChangeBabbleAPIAdmin/app/api/Wav2Lip/temp/temp.wav'
+		audio_file = '/home/ubuntu/FaceChangeBabbleAPIAdmin/app/api/Wav2Lip/temp/temp.wav'
 
-	wav = audio.load_wav(args.audio, 16000)
+	wav = audio.load_wav(audio_file, 16000)
 	mel = audio.melspectrogram(wav)
 	print(mel.shape)
 
@@ -243,13 +223,13 @@ def main():
 
 	full_frames = full_frames[:len(mel_chunks)]
 
-	batch_size = args.wav2lip_batch_size
+	batch_size = wav2lip_batch_size
 	gen = datagen(full_frames.copy(), mel_chunks)
 
 	for i, (img_batch, mel_batch, frames, coords) in enumerate(tqdm(gen, 
 											total=int(np.ceil(float(len(mel_chunks))/batch_size)))):
 		if i == 0:
-			model = load_model(args.checkpoint_path)
+			model = load_model(checkpoint_path)
 			print ("Model loaded")
 
 			frame_h, frame_w = full_frames[0].shape[:-1]
@@ -273,8 +253,7 @@ def main():
 
 	out.release()
 
-	command = 'ffmpeg -y -i {} -i {} -strict -2 -q:v 1 {}'.format(args.audio, '/home/ubuntu/FaceChangeBabbleAPIAdmin/app/api/Wav2Lip/temp/result.avi', args.outfile)
+	command = 'ffmpeg -y -i {} -i {} -strict -2 -q:v 1 {}'.format(audio_file, '/home/ubuntu/FaceChangeBabbleAPIAdmin/app/api/Wav2Lip/temp/result.avi', outfile)
 	subprocess.call(command, shell=platform.system() != 'Windows')
 
-if __name__ == '__main__':
-	main()
+
