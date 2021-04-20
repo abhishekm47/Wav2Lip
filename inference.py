@@ -18,9 +18,9 @@ final_fps = 25.
 
 bbox_pads = [0, 10, 0, 0]
 
-face_det_batch_size = 16
+face_det_batch_size = 4
 
-wav2lip_batch_size = 128
+wav2lip_batch_size = 64
 
 resize_factor = 1
 
