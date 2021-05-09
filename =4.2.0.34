@@ -1,2 +1,0 @@
-Requirement already satisfied: opencv-contrib-python in /home/ubuntu/anaconda3/envs/tensorflow_p36/lib/python3.6/site-packages (4.5.1.48)
-Requirement already satisfied: numpy>=1.13.3 in /home/ubuntu/anaconda3/envs/tensorflow_p36/lib/python3.6/site-packages (from opencv-contrib-python) (1.19.5)
