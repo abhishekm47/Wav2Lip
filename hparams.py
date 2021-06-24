@@ -8,7 +8,8 @@ def get_image_list(data_root, split):
 		for line in f:
 			line = line.strip()
 			if ' ' in line: line = line.split()[0]
-			filelist.append(os.path.join(data_root, line))
+			filelist.append(os.path.join(data_root+split+'/', line))
+			print(os.path.join(data_root+split+'/', line))
 
 	return filelist
 
