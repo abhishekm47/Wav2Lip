@@ -10,13 +10,16 @@ from torch import optim
 import torch.backends.cudnn as cudnn
 from torch.utils import data as data_utils
 import numpy as np
+# from opencv_transforms import transforms
+
 
 from glob import glob
+import datetime
 
 import os, random, cv2, argparse
 from hparams import hparams, get_image_list
 
-from multiprocessing import Manager
+# from multiprocessing import Manager
 
 
 
@@ -29,7 +32,7 @@ parser.add_argument('--checkpoint_path', help='Resumed from this checkpoint', de
 
 args = parser.parse_args()
 
-
+running_evaluation_losses = []
 global_step = 0
 global_epoch = 0
 use_cuda = torch.cuda.is_available()
@@ -39,10 +42,10 @@ syncnet_T = 5
 syncnet_mel_step_size = 16
 
 class Dataset(object):
-    def __init__(self, split, shared_dict):
+    def __init__(self, split):
         print(args.data_root)
         self.all_videos = get_image_list(args.data_root, split)
-        self.shared_dict = shared_dict
+        # self.shared_dict = shared_dict
     def get_frame_id(self, frame):
         return int(basename(frame).split('.')[0])
 
@@ -73,13 +76,18 @@ class Dataset(object):
 
     def __getitem__(self, idx):
         while 1:
+            
+            time_start = datetime.datetime.now()
             idx = random.randint(0, len(self.all_videos) - 1)
             vidname = self.all_videos[idx]
 
             img_names = list(glob(join(vidname, '*.jpg')))
+            # time_end1 = datetime.datetime.now()
+            # print("get item time1")
+            # print(time_end1 - time_start)
+
             #print(img_names)
             if len(img_names) <= 3 * syncnet_T:
-               
                 continue
             img_name = random.choice(img_names)
             wrong_img_name = random.choice(img_names)
@@ -100,10 +108,17 @@ class Dataset(object):
 
             window = []
             all_read = True
+            # augmentation_transform = transforms.Compose([
+            #     transforms.RandomHorizontalFlip(),
+            #     transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1)
+            # ])
             for fname in window_fnames:
                 img = cv2.imread(fname)
+                # img = augmentation_transform(img)
                 if img is None:
                     all_read = False
+                    print("Couldn't read image")
+                    print(fname)
                    
                     break
                 try:
@@ -119,12 +134,15 @@ class Dataset(object):
 
             try:
                 wavpath = join(vidname, "audio.wav")
-                if wavpath not in self.shared_dict:
-                    wav = audio.load_wav(wavpath, hparams.sample_rate)
-                    orig_mel = audio.melspectrogram(wav).T
-                    self.shared_dict[wavpath] = orig_mel
-                else:
-                    orig_mel = self.shared_dict[wavpath]
+                wav = audio.load_wav(wavpath, hparams.sample_rate)
+                orig_mel = audio.melspectrogram(wav).T
+
+                # if wavpath not in self.shared_dict:
+                #     wav = audio.load_wav(wavpath, hparams.sample_rate)
+                #     orig_mel = audio.melspectrogram(wav).T
+                #     self.shared_dict[wavpath] = orig_mel
+                # else:
+                #     orig_mel = self.shared_dict[wavpath]
                
             except Exception as e:
               
@@ -143,6 +161,10 @@ class Dataset(object):
 
             x = torch.FloatTensor(x)
             mel = torch.FloatTensor(mel.T).unsqueeze(0)
+
+            # time_end2 = datetime.datetime.now()
+            # print("get item time2")
+            # print(time_end2 - time_start)
             
            
             return x, mel, y
@@ -196,16 +218,33 @@ def train(device, model, train_data_loader, test_data_loader, optimizer,
                 with torch.no_grad():
                     eval_model(test_data_loader, global_step, device, model, checkpoint_dir)
 
+            # if(global_step % 100 == 0):
             prog_bar.set_description('Loss: {}'.format(running_loss / (step + 1)))
 
         global_epoch += 1
 
 def eval_model(test_data_loader, global_step, device, model, checkpoint_dir):
-    eval_steps = 1400
+    eval_steps = 1000
     print('Evaluating for {} steps'.format(eval_steps))
     losses = []
     while 1:
         for step, (x, mel, y) in enumerate(test_data_loader):
+
+            
+            if(step == 0):
+                # image_to_save = x.copy()
+                image_to_save_batch = x.cpu().numpy() * 255
+                image_to_save_batch = image_to_save_batch.astype(np.uint8)
+                for this_batch in range(0, image_to_save_batch.shape[1]):
+                    image_to_save = image_to_save_batch[0,this_batch,:,:]
+                    save_path_dir = checkpoint_dir + '/images'
+                    os.makedirs(save_path_dir, exist_ok=True)
+
+                    save_path_image = save_path_dir + "/" + str(global_step) + "_" + str(step) + "_" + str(this_batch) + ".png"
+                    cv2.imwrite(save_path_image, image_to_save)
+
+
+
 
             model.eval()
 
@@ -223,7 +262,9 @@ def eval_model(test_data_loader, global_step, device, model, checkpoint_dir):
             if step > eval_steps: break
 
         averaged_loss = sum(losses) / len(losses)
-        print(averaged_loss)
+        # print(averaged_loss)
+        running_evaluation_losses.append([global_step, averaged_loss])
+        print(running_evaluation_losses)
 
         return
 
@@ -241,11 +282,7 @@ def save_checkpoint(model, optimizer, step, checkpoint_dir, epoch):
     print("Saved checkpoint:", checkpoint_path)
 
 def _load(checkpoint_path):
-    if use_cuda:
-        checkpoint = torch.load(checkpoint_path)
-    else:
-        checkpoint = torch.load(checkpoint_path,
-                                map_location=lambda storage, loc: storage)
+    checkpoint = torch.load(checkpoint_path, map_location=lambda storage, loc: storage)
     return checkpoint
 
 def load_checkpoint(path, model, optimizer, reset_optimizer=False):
@@ -271,11 +308,14 @@ if __name__ == "__main__":
 
     if not os.path.exists(checkpoint_dir): os.mkdir(checkpoint_dir)
 
-    manager = Manager()
-    shared_dict = manager.dict()
+    # manager = Manager()
+    # shared_dict = manager.dict()
     # Dataset and Dataloader setup
-    train_dataset = Dataset('train', shared_dict)
-    test_dataset = Dataset('val', shared_dict)
+    # train_dataset = Dataset('train', shared_dict)
+    # test_dataset = Dataset('val', shared_dict)
+
+    train_dataset = Dataset('train')
+    test_dataset = Dataset('val')
 
     train_data_loader = data_utils.DataLoader(
         train_dataset, batch_size=hparams.syncnet_batch_size, shuffle=True,

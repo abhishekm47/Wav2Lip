@@ -5,6 +5,9 @@ import subprocess
 import shutil
 import hashlib
 import re
+import sys
+
+
 
 dataset_path = "/home/ubuntu/Wav2Lip/dataset"
 
@@ -19,13 +22,18 @@ val_videos = glob(val_set+"/*/")
 val_file = "/home/ubuntu/Wav2Lip/filelists/val.txt"
 train_file = "/home/ubuntu/Wav2Lip/filelists/train.txt"
 
+sys.stdout = open(train_file, 'wt', encoding="utf-8")
 
+count = 1
 for video in train_videos:
+    #print(count)
     video_basename = os.path.basename(video)
     
     trajectories = glob(video+"/*/")
     for t in trajectories:
         print(t)
+        
+    count =count+1
         
         
     
