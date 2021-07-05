@@ -10,7 +10,7 @@ from torch import optim
 import torch.backends.cudnn as cudnn
 from torch.utils import data as data_utils
 import numpy as np
-
+import re
 from glob import glob
 
 import os, random, cv2, argparse
@@ -40,7 +40,7 @@ syncnet_mel_step_size = 16
 
 class Dataset(object):
     def __init__(self, split, shared_dict):
-        print(args.data_root)
+        print(args.data_root, split)
         self.all_videos = get_image_list(args.data_root, split)
         self.shared_dict = shared_dict
     def get_frame_id(self, frame):
@@ -77,14 +77,41 @@ class Dataset(object):
             vidname = self.all_videos[idx]
 
             img_names = list(glob(join(vidname, '*.jpg')))
+            img_names.sort(key=lambda f: int(re.sub('\D', '', f)))
+            
             #print(img_names)
             if len(img_names) <= 3 * syncnet_T:
                
                 continue
             img_name = random.choice(img_names)
-            wrong_img_name = random.choice(img_names)
-            while wrong_img_name == img_name:
-                wrong_img_name = random.choice(img_names)
+            i = img_names.index(img_name)
+            
+            if len(img_names) > 30:
+                if(random.uniform(0, 1) > 0.5):
+                    j = random.choice([ele for ele in range(i, i+20) if ele != i])
+                else:
+                    j = random.choice([ele for ele in range(i-20, i) if ele != i])
+            else:
+                if(random.uniform(0, 1) > 0.5):
+                    j = random.choice([ele for ele in range(i, i+5) if ele != i])
+                else:
+                    j = random.choice([ele for ele in range(i-5, i) if ele != i])
+                    
+            if j >= len(img_names):
+                j=len(img_names) -1
+                
+            if j < 0:
+                if(i == 0):
+                    j = i+5
+                else:
+                    j = 0
+                
+            #print("wrong_img_idx:{}, image_name_idx:{}".format(j,i))
+            
+                    
+            wrong_img_name = img_names[j]
+            
+            
 
             if random.choice([True, False]):
                 y = torch.ones(1).float()

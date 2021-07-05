@@ -16,3 +16,9 @@ evaluation/test_filelists/lr*.txt
 *.mp3
 dataset
 preprocessed_avspeech
+exp1
+exp2
+exp3
+exp4
+exp5
+exp6

@@ -19,6 +19,9 @@ val_videos = glob(val_set+"/*/")
 val_file = "/home/ubuntu/Wav2Lip/filelists/val.txt"
 train_file = "/home/ubuntu/Wav2Lip/filelists/train.txt"
 
+import sys
+
+sys.stdout = open(train_file, 'wt', encoding="utf-8")
 
 for video in train_videos:
     video_basename = os.path.basename(video)
