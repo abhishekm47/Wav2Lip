@@ -3,16 +3,17 @@ from tqdm import tqdm
 
 from models import SyncNet_color as SyncNet
 import audio
-
+import io
 import torch
 from torch import nn
 from torch import optim
+import torchvision
 import torch.backends.cudnn as cudnn
 from torch.utils import data as data_utils
 import numpy as np
-import re
+from opencv_transforms import transforms
+from torchvision import transforms as torch_transforms
 from glob import glob
-
 import os, random, cv2, argparse
 from hparams import hparams, get_image_list
 
@@ -39,10 +40,12 @@ syncnet_T = 5
 syncnet_mel_step_size = 16
 
 class Dataset(object):
-    def __init__(self, split, shared_dict):
-        print(args.data_root, split)
+    def __init__(self, split, shared_dict, writer):
+        print(args.data_root)
         self.all_videos = get_image_list(args.data_root, split)
         self.shared_dict = shared_dict
+        self.writer = writer
+        self.desc = split
     def get_frame_id(self, frame):
         return int(basename(frame).split('.')[0])
 
@@ -77,41 +80,14 @@ class Dataset(object):
             vidname = self.all_videos[idx]
 
             img_names = list(glob(join(vidname, '*.jpg')))
-            img_names.sort(key=lambda f: int(re.sub('\D', '', f)))
-            
             #print(img_names)
             if len(img_names) <= 3 * syncnet_T:
                
                 continue
             img_name = random.choice(img_names)
-            i = img_names.index(img_name)
-            
-            if len(img_names) > 30:
-                if(random.uniform(0, 1) > 0.5):
-                    j = random.choice([ele for ele in range(i, i+20) if ele != i])
-                else:
-                    j = random.choice([ele for ele in range(i-20, i) if ele != i])
-            else:
-                if(random.uniform(0, 1) > 0.5):
-                    j = random.choice([ele for ele in range(i, i+5) if ele != i])
-                else:
-                    j = random.choice([ele for ele in range(i-5, i) if ele != i])
-                    
-            if j >= len(img_names):
-                j=len(img_names) -1
-                
-            if j < 0:
-                if(i == 0):
-                    j = i+5
-                else:
-                    j = 0
-                
-            #print("wrong_img_idx:{}, image_name_idx:{}".format(j,i))
-            
-                    
-            wrong_img_name = img_names[j]
-            
-            
+            wrong_img_name = random.choice(img_names)
+            while wrong_img_name == img_name:
+                wrong_img_name = random.choice(img_names)
 
             if random.choice([True, False]):
                 y = torch.ones(1).float()
@@ -127,12 +103,23 @@ class Dataset(object):
 
             window = []
             all_read = True
+            augmentation_transform = transforms.Compose([
+                 transforms.RandomHorizontalFlip(p=1.0)
+                 #transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1)
+             ])
+
+            should_flip = False;
+            if(random.random() <=0.50):
+                should_flip = True;
+
             for fname in window_fnames:
                 img = cv2.imread(fname)
                 if img is None:
                     all_read = False
-                   
                     break
+                if(should_flip == True):
+                    img = augmentation_transform(img)
+
                 try:
                     img = cv2.resize(img, (hparams.img_size, hparams.img_size))
                 except Exception as e:
@@ -141,6 +128,10 @@ class Dataset(object):
                     break
 
                 window.append(img)
+                
+            #for i, w in enumerate(window):
+                
+                #self.writer.add_image(self.desc+'-'+str(i), cv2.imencode('.jpg', w)[1].tostring())
 
             if not all_read: continue
 
@@ -181,7 +172,7 @@ def cosine_loss(a, v, y):
 
     return loss
 
-def train(device, model, train_data_loader, test_data_loader, optimizer,
+def train(device, model, train_data_loader, test_data_loader, optimizer,scheduler,writer,
           checkpoint_dir=None, checkpoint_interval=None, nepochs=None):
 
     global global_step, global_epoch
@@ -209,7 +200,6 @@ def train(device, model, train_data_loader, test_data_loader, optimizer,
             loss = cosine_loss(a, v, y)
             loss.backward()
             optimizer.step()
-
             global_step += 1
             print('global_step_change: {}'.format(global_step))
             cur_session_steps = global_step - resumed_step
@@ -221,13 +211,23 @@ def train(device, model, train_data_loader, test_data_loader, optimizer,
 
             if global_step % hparams.syncnet_eval_interval == 0:
                 with torch.no_grad():
-                    eval_model(test_data_loader, global_step, device, model, checkpoint_dir)
+                    eval_model(test_data_loader, global_step, device, model, checkpoint_dir, writer)
+                #scheduler.step()
 
             prog_bar.set_description('Loss: {}'.format(running_loss / (step + 1)))
+            
+            writer.add_scalar('running Loss: ', (running_loss / (step + 1)), global_step)
 
         global_epoch += 1
+        
+        
+        print('Step:{0} | lr: {1} | Epochs:{2}'.format(step + 1, optimizer.param_groups[0]['lr'], global_epoch))
+        writer.add_scalar('Step_LR: ',(optimizer.param_groups[0]['lr']), global_step)
+        
+        
+        
 
-def eval_model(test_data_loader, global_step, device, model, checkpoint_dir):
+def eval_model(test_data_loader, global_step, device, model, checkpoint_dir, writer):
     eval_steps = 1400
     print('Evaluating for {} steps'.format(eval_steps))
     losses = []
@@ -251,6 +251,7 @@ def eval_model(test_data_loader, global_step, device, model, checkpoint_dir):
 
         averaged_loss = sum(losses) / len(losses)
         print(averaged_loss)
+        writer.add_scalar('averaged loss: ', (averaged_loss), global_step)
 
         return
 
@@ -293,6 +294,9 @@ def load_checkpoint(path, model, optimizer, reset_optimizer=False):
     return model
 
 if __name__ == "__main__":
+    from torch.utils.tensorboard import SummaryWriter
+    writer = SummaryWriter('experiment8/SynNet_logs')
+    
     checkpoint_dir = args.checkpoint_dir
     checkpoint_path = args.checkpoint_path
 
@@ -301,8 +305,8 @@ if __name__ == "__main__":
     manager = Manager()
     shared_dict = manager.dict()
     # Dataset and Dataloader setup
-    train_dataset = Dataset('train', shared_dict)
-    test_dataset = Dataset('val', shared_dict)
+    train_dataset = Dataset('train', shared_dict, writer)
+    test_dataset = Dataset('val', shared_dict, writer)
 
     train_data_loader = data_utils.DataLoader(
         train_dataset, batch_size=hparams.syncnet_batch_size, shuffle=True,
@@ -320,11 +324,15 @@ if __name__ == "__main__":
 
     optimizer = optim.Adam([p for p in model.parameters() if p.requires_grad],
                            lr=hparams.syncnet_lr)
-
+    
+    scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=25, gamma=0.1)
+    
     if checkpoint_path is not None:
         load_checkpoint(checkpoint_path, model, optimizer, reset_optimizer=False)
 
-    train(device, model, train_data_loader, test_data_loader, optimizer,
+    train(device, model, train_data_loader, test_data_loader, optimizer,scheduler,writer,
           checkpoint_dir=checkpoint_dir,
           checkpoint_interval=hparams.syncnet_checkpoint_interval,
           nepochs=hparams.nepochs)
+    writer.flush()
+    writer.close()

@@ -5,6 +5,7 @@ import subprocess
 import shutil
 import hashlib
 import re
+import sys
 
 dataset_path = "/home/ubuntu/Wav2Lip/dataset"
 
@@ -19,11 +20,10 @@ val_videos = glob(val_set+"/*/")
 val_file = "/home/ubuntu/Wav2Lip/filelists/val.txt"
 train_file = "/home/ubuntu/Wav2Lip/filelists/train.txt"
 
-import sys
 
-sys.stdout = open(train_file, 'wt', encoding="utf-8")
+sys.stdout = open(val_file, 'wt', encoding="utf-8")
 
-for video in train_videos:
+for video in val_videos:
     video_basename = os.path.basename(video)
     
     trajectories = glob(video+"/*/")
