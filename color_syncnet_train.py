@@ -85,7 +85,33 @@ class Dataset(object):
                
                 continue
             img_name = random.choice(img_names)
-            wrong_img_name = random.choice(img_names)
+            i = img_names.index(img_name)
+            
+            if len(img_names) > 30:
+                if(random.uniform(0, 1) > 0.5):
+                    j = random.choice([ele for ele in range(i, i+100) if ele != i])
+                else:
+                    j = random.choice([ele for ele in range(i-100, i) if ele != i])
+            else:
+                if(random.uniform(0, 1) > 0.5):
+                    j = random.choice([ele for ele in range(i, i+5) if ele != i])
+                else:
+                    j = random.choice([ele for ele in range(i-5, i) if ele != i])
+                    
+            if j >= len(img_names):
+                j=len(img_names) -1
+                
+            if j < 0:
+                if(i == 0):
+                    j = i+5
+                else:
+                    j = 0
+                
+            #print("wrong_img_idx:{}, image_name_idx:{}".format(j,i))
+            
+                    
+            wrong_img_name = img_names[j]
+            
             while wrong_img_name == img_name:
                 wrong_img_name = random.choice(img_names)
 
@@ -295,7 +321,7 @@ def load_checkpoint(path, model, optimizer, reset_optimizer=False):
 
 if __name__ == "__main__":
     from torch.utils.tensorboard import SummaryWriter
-    writer = SummaryWriter('experiment8/SynNet_logs')
+    writer = SummaryWriter('experiment15/SynNet_logs')
     
     checkpoint_dir = args.checkpoint_dir
     checkpoint_path = args.checkpoint_path
@@ -323,7 +349,7 @@ if __name__ == "__main__":
     print('total trainable params {}'.format(sum(p.numel() for p in model.parameters() if p.requires_grad)))
 
     optimizer = optim.Adam([p for p in model.parameters() if p.requires_grad],
-                           lr=hparams.syncnet_lr)
+                           lr=hparams.syncnet_lr, betas=(0.5, 0.999))
     
     scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=25, gamma=0.1)
     
